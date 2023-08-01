@@ -19,9 +19,54 @@ fn main() {
     let list = Arc::new(Mutex::new(v));
     let counter = Arc::new(Mutex::new(0));
 
-    while list.lock().unwrap().len() > 0 {
-        test(&list, &counter);
-    }
+    let task1_list = Arc::clone(&list);
+    let task1_counter = Arc::clone(&counter);
+
+    let task1 = thread::spawn(move || {
+        println!("loop");
+        let mut count = 0;
+        while task1_list.lock().unwrap().len() > 0 {
+            let result = task1_list.lock().unwrap().pop();
+
+            match result {
+                Some(path) => {
+                    println!("{:?}", path);
+                    let mut num = task1_counter.lock().unwrap();
+                    *num += 1;
+                }
+                None => println!("None"),
+            }
+            count += 1;
+        }
+        count
+    });
+
+    let task2_list = Arc::clone(&list);
+    let task2_counter = Arc::clone(&counter);
+
+    let task2 = thread::spawn(move || {
+        println!("loop");
+        let mut count = 0;
+        while task2_list.lock().unwrap().len() > 0 {
+            let result = task2_list.lock().unwrap().pop();
+
+            match result {
+                Some(path) => {
+                    println!("{:?}", path);
+                    let mut num = task2_counter.lock().unwrap();
+                    *num += 1;
+                }
+                None => println!("None"),
+            }
+            count += 1;
+        }
+        count
+    });
+
+    task1.join().unwrap();
+    task2.join().unwrap();
+    // let (res1, res2): (i32, String) = tokio::join!(task1, task2);
+    // println!("{} {}", res1, res2);
 
     println!("{:?}", counter.lock().unwrap());
 }

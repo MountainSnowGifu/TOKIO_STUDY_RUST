@@ -1,57 +1,76 @@
-use bytes::Bytes;
-use std::{collections::HashMap, time::Duration};
-use tokio::task;
-
-use mini_redis::{cmd::Get, Connection, Frame};
-use tokio::net::{TcpListener, TcpStream};
-
-use std::rc::Rc;
-use tokio::task::yield_now;
-
+use std::future::Future;
+use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-type Db = Arc<Mutex<HashMap<String, Bytes>>>;
+use std::task::{Context, Poll};
+use std::{fs, io, thread};
+use tokio::sync::oneshot;
 
 #[tokio::main]
 async fn main() {
-    let listener = TcpListener::bind("127.0.0.1:6379").await.unwrap();
+    let v = read_dir_entries("/Users/akira/Desktop/kaori/動画")
+        .unwrap()
+        .into_iter()
+        .filter(|x| x.to_str().unwrap().contains("."))
+        .collect::<Vec<PathBuf>>();
 
-    println!("Listening");
+    println!("{:?}", v.len());
 
-    let db = Arc::new(Mutex::new(HashMap::new()));
+    let list = Arc::new(Mutex::new(v));
+    let counter = Arc::new(Mutex::new(0));
 
-    loop {
-        let (socket, _) = listener.accept().await.unwrap();
-        let db = db.clone();
+    let task1_list = Arc::clone(&list);
+    let task1_counter = Arc::clone(&counter);
 
-        tokio::spawn(async move {
-            process(socket, db).await;
-        });
-    }
+    let task1 = thread::spawn(move || {
+        let mut count = 0;
+        while task1_list.lock().unwrap().len() > 0 {
+            let result = task1_list.lock().unwrap().pop();
+
+            match result {
+                Some(path) => {
+                    println!("{:?}", path);
+                    let mut num = task1_counter.lock().unwrap();
+                    *num += 1;
+                }
+                None => println!("None"),
+            }
+            count += 1;
+        }
+        count
+    });
+
+    let task2_list = Arc::clone(&list);
+    let task2_counter = Arc::clone(&counter);
+
+    let task2 = thread::spawn(move || {
+        let mut count = 0;
+        while task2_list.lock().unwrap().len() > 0 {
+            let result = task2_list.lock().unwrap().pop();
+
+            match result {
+                Some(path) => {
+                    println!("{:?}", path);
+                    let mut num = task2_counter.lock().unwrap();
+                    *num += 1;
+                }
+                None => println!("None"),
+            }
+            count += 1;
+        }
+        count
+    });
+
+    let t = task1.join().unwrap();
+    let t2 = task2.join().unwrap();
+    println!("{} + {} = {}", t, t2, counter.lock().unwrap());
 }
 
-async fn process(socket: TcpStream, db: Db) {
-    use mini_redis::Command::{self, Get, Set};
+fn read_dir_entries<P: AsRef<Path>>(path: P) -> io::Result<Vec<PathBuf>> {
+    let mut entries = fs::read_dir(path)?
+        .map(|res| res.map(|e| e.path()))
+        .collect::<Result<Vec<_>, io::Error>>()?;
 
-    let mut connection = Connection::new(socket);
-
-    while let Some(frame) = connection.read_frame().await.unwrap() {
-        let response = match Command::from_frame(frame).unwrap() {
-            Set(cmd) => {
-                let mut db = db.lock().unwrap();
-                db.insert(cmd.key().to_string(), cmd.value().clone());
-                Frame::Simple("OK".to_string())
-            }
-            Get(cmd) => {
-                let db = db.lock().unwrap();
-                if let Some(value) = db.get(cmd.key()) {
-                    Frame::Bulk(value.clone())
-                } else {
-                    Frame::Null
-                }
-            }
-            cmd => panic!("unimplemented{:?}", cmd),
-        };
-
-        connection.write_frame(&response).await.unwrap();
-    }
+    entries.sort();
+    Ok(entries)
 }
